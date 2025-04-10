@@ -1,16 +1,16 @@
 package main
 
 import (
-	pb "proj/Services"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"math/rand"
-	"time"
-	"fmt"
 	"net"
+	pb "proj/Services"
 	"strconv"
 	"sync"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -18,7 +18,7 @@ import (
 
 const (
 	port             = ":50060"
-	keepAliveTimeout = 2* time.Second 
+	keepAliveTimeout = 2 * time.Second
 )
 
 type FileRecord struct {
@@ -36,7 +36,7 @@ type MachineRecord struct {
 type server struct {
 	fileRecords      map[string]*FileRecord
 	machineRecords   []*MachineRecord
-	lastKeepAliveMap map[int]time.Time 
+	lastKeepAliveMap map[int]time.Time
 	mutex            sync.Mutex
 	pb.UnimplementedFileServiceServer
 }
@@ -131,7 +131,7 @@ func (s *server) NotifyUploaded(ctx context.Context, in *pb.NotifyUploadedReques
 		DataNodes: []int32{in.DataNode},
 	}
 
-		// Get client metadata
+	// Get client metadata
 
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
@@ -142,27 +142,26 @@ func (s *server) NotifyUploaded(ctx context.Context, in *pb.NotifyUploadedReques
 
 	fmt.Printf("Client IP: %s | Port: %s\n", clientIP, clientPort)
 
-
 	// Notify client asynchronously
 	go func() {
 		clientAddr := fmt.Sprintf("%s:%s", clientIP[0], clientPort[0])
 		conn, err := grpc.Dial(clientAddr, grpc.WithInsecure())
 		if err != nil {
 			log.Printf("Dial client fail %v", err)
-			return 
+			return
 		}
 		defer conn.Close()
 
 		client := pb.NewFileServiceClient(conn)
 
-		_, err := client.SendNotification(context.Background(), &pb.SendNotificationRequest{
+		useless, err := client.SendNotification(context.Background(), &pb.SendNotificationRequest{
 			Message: "File Upload Finish",
 		})
 		if err != nil {
 			log.Printf("SendNotification to client fail %v", err)
 		}
+		fmt.Printf(useless.String())
 	}()
-
 
 	// Trigger replication
 	sourceID := in.DataNode
@@ -176,7 +175,7 @@ func (s *server) NotifyUploaded(ctx context.Context, in *pb.NotifyUploadedReques
 			replicateIPs = append(replicateIPs, s.machineRecords[replicateId].IPAddress)
 			replicatePorts = append(replicatePorts, s.machineRecords[replicateId].AvailablePorts[rand.Intn(len(s.machineRecords[replicateId].AvailablePorts))])
 			replicateIds = append(replicateIds, replicateId)
-		} 
+		}
 	}
 	replicateRequest := &pb.ReplicateRequest{
 		FileName:    in.FileName,
@@ -209,18 +208,17 @@ func (s *server) NotifyUploaded(ctx context.Context, in *pb.NotifyUploadedReques
 	return &pb.NotifyUploadedResponse{}, nil
 }
 
-
 // =======================
 // Background Processes
 // =======================
 
 func (s *server) replicationScheduler() {
 	for {
-		time.Sleep(10 * time.Second) 
+		time.Sleep(10 * time.Second)
 		s.mutex.Lock()
 
 		for _, fileRecord := range s.fileRecords {
-			var liveNodeIndexes []int 
+			var liveNodeIndexes []int
 			for i, datanode := range fileRecord.DataNodes {
 				if s.machineRecords[datanode].Liveness {
 					liveNodeIndexes = append(liveNodeIndexes, i)
@@ -295,7 +293,7 @@ func (s *server) monitorKeepAlive() {
 				active := time.Since(lastTime) < keepAliveTimeout
 				s.machineRecords[nodeID].Liveness = active
 
-				log.Printf("DataNode #%d Active: %t", id, active)
+				log.Printf("DataNode #%d Active: %t", nodeID, active)
 			}
 			s.mutex.Unlock()
 		}

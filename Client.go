@@ -1,37 +1,32 @@
 package main
 
 import (
-	pb "proj/Services"
-	"context"
 	"bufio"
+	"context"
+	"fmt"
 	"log"
 	"math/rand"
-	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	pb "proj/Services"
 	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
 
-
-
 const (
-	masterAddress = "localhost:50060"               // Address of the master node
-	clientAddress = "localhost:12345" // Address of the client server
+	masterAddress   = "localhost:50060" // Address of the master node
+	clientAddress   = "localhost:12345" // Address of the client server
 	fileStoragePath = "./toupload"
 	downloadDir     = "./downloads"
 )
 
-
-//Client server for Notification on upload finish
+// Client server for Notification on upload finish
 type ClientServer struct {
 	pb.UnimplementedFileServiceServer
 }
-
-
 
 func (c *ClientServer) SendNotification(ctx context.Context, req *pb.SendNotificationRequest) (*pb.SendNotificationResponse, error) {
 	fmt.Printf("Notificatoin from master: %s\n", req.Message)
@@ -42,12 +37,8 @@ func main() {
 	// Launch client-side gRPC server for notifications
 	go startClientServer()
 
-
-	
 	md := metadata.Pairs("client-ip", "localhost", "client-port", "12345")
 	ctx := metadata.NewOutgoingContext(context.Background(), md)
-
-
 
 	masterConn, err := grpc.Dial(masterAddress, grpc.WithInsecure())
 	if err != nil {
@@ -60,9 +51,10 @@ func main() {
 		fmt.Print("'u', 'd', or 'e'")
 		reader := bufio.NewReader(os.Stdin)
 		answer, err := reader.ReadString('\n')
-		
-
-		command = strings.TrimSpace(strings.ToLower(answer))
+		if err != nil {
+			log.Fatalf("Failed to initialize read string: %v", err)
+		}
+		command := strings.TrimSpace(strings.ToLower(answer))
 
 		switch command {
 		case "u":
@@ -90,7 +82,7 @@ func startClientServer() {
 	defer listener.Close()
 
 	grpcServer := grpc.NewServer()
-	pb.RegisterFileServiceServer(grpcServer, &ClientListener{})
+	pb.RegisterFileServiceServer(grpcServer, &ClientServer{})
 
 	log.Printf("Client notification server running on %s", clientAddress)
 	if err := grpcServer.Serve(listener); err != nil {
@@ -116,7 +108,7 @@ func uploadFile(ctx context.Context, masterClient pb.FileServiceClient) {
 		log.Fatalf("Failed to get upload details: %v", err)
 	}
 
-	dataNodeAddr := fmt.Sprintf("%s:%d", response.IpAddress, response.PortNumber)
+	dataNodeAddr := fmt.Sprintf("%s%d", response.IpAddress, response.PortNumber)
 	fmt.Println("Uploading to:", dataNodeAddr)
 
 	// Connect to DataNode
@@ -138,7 +130,6 @@ func uploadFile(ctx context.Context, masterClient pb.FileServiceClient) {
 	fmt.Println("Upload response:", uploadResponse.Message)
 }
 
-
 // Download file from the distributed system
 func downloadFile(ctx context.Context, masterClient pb.FileServiceClient) {
 	var fileName string
@@ -153,7 +144,6 @@ func downloadFile(ctx context.Context, masterClient pb.FileServiceClient) {
 		log.Fatalf("Download request failed: %v", err)
 	}
 
-	
 	// Ensure download directory exists
 	if _, err := os.Stat(downloadDir); os.IsNotExist(err) {
 		if err := os.Mkdir(downloadDir, 0755); err != nil {
@@ -165,7 +155,7 @@ func downloadFile(ctx context.Context, masterClient pb.FileServiceClient) {
 	availableNodes := len(response.IpAddress)
 	if availableNodes == 0 {
 		log.Fatal("No available DataNodes for download")
-	}	
+	}
 
 	selectedIndex := rand.Intn(availableNodes)
 	dataNodeAddr := fmt.Sprintf("%s:%d", response.IpAddress[selectedIndex], response.PortNumbers[selectedIndex])
@@ -178,7 +168,7 @@ func downloadFile(ctx context.Context, masterClient pb.FileServiceClient) {
 	}
 	defer dataConn.Close()
 	dataClient := pb.NewFileServiceClient(dataConn)
-	
+
 	// Request file download
 	downloadResponse, err := dataClient.DownloadFile(ctx, &pb.FileDownloadRequest{
 		FileName: fileName,
@@ -193,6 +183,5 @@ func downloadFile(ctx context.Context, masterClient pb.FileServiceClient) {
 		log.Fatalf("Failed to save downloaded file: %v", err)
 	}
 	fmt.Printf("Download successful. File saved at: %s\n", filePath)
-	
 
 }

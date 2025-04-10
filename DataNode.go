@@ -2,24 +2,24 @@ package main
 
 import (
 	"context"
-	"log"
-	"path/filepath"
-	"strings"
-	"time"
 	"fmt"
+	"log"
 	"net"
 	"os"
+	"path/filepath"
 	pb "proj/Services"
+	"strings"
+	"time"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
-
 )
 
+var id int32
+
 const (
-	port                   = ":50052"
-	masterAddress          = "localhost:50060" // Address of the master node
-	maxGRPCSize       = 1024 * 1024 * 100 // 100 MB
-	id               int32 = 0
+	masterAddress = "localhost:50060" // Address of the master node
+	maxGRPCSize   = 1024 * 1024 * 100 // 100 MB
 
 )
 
@@ -29,7 +29,7 @@ type dataNodeServer struct {
 
 // Handles file upload from a client node
 
-func (d *dataNodeServer) UploadFile(ctx context.Context, in *pb.FileUploadRequest) (*pb.FileUploadResponse, error) {
+func (d *dataNodeServer) UploadFile(ctx context.Context, req *pb.FileUploadRequest) (*pb.FileUploadResponse, error) {
 	log.Printf("Received upload request for: %s", req.FileName)
 
 	// Metadata extraction (client IP and port)
@@ -40,17 +40,15 @@ func (d *dataNodeServer) UploadFile(ctx context.Context, in *pb.FileUploadReques
 	clientIP := strings.Join(md.Get("client-ip"), ",")
 	clientPort := strings.Join(md.Get("client-port"), ",")
 
-
-outMeta := metadata.Pairs("client-ip", clientIP, "client-port", clientPort)
+	outMeta := metadata.Pairs("client-ip", clientIP, "client-port", clientPort)
 	outCtx := metadata.NewOutgoingContext(context.Background(), outMeta)
 
-	
 	// Save directory for this DataNode
-	nodeDir := fmt.Sprintf("./uploaded_%d", dataNodeID)
+	nodeDir := fmt.Sprintf("./uploaded_%d", id)
 	if err := os.MkdirAll(nodeDir, 0755); err != nil {
 		return nil, fmt.Errorf("error creating upload dir: %v", err)
 	}
-	
+
 	// File saving path
 	savePath := filepath.Join(nodeDir, req.FileName+".mp4")
 	file, err := os.Create(savePath)
@@ -65,14 +63,12 @@ outMeta := metadata.Pairs("client-ip", clientIP, "client-port", clientPort)
 
 	log.Printf("File stored at: %s", savePath)
 
-
 	// Write the content to the file
 
-	log.Printf("File uploaded success at %s", filePath)
-	
+	log.Printf("File uploaded success at %s", savePath)
 
-	 // Asynchronously notify the master node about the upload
-	 go notifyMasterOfUpload(outCtx, req.FileName, savePath)
+	// Asynchronously notify the master node about the upload
+	go notifyMasterOfUpload(outCtx, req.FileName, savePath)
 
 	return &pb.FileUploadResponse{Message: "Upload successful"}, nil
 }
@@ -96,7 +92,6 @@ func notifyMasterOfUpload(ctx context.Context, filename, path string) {
 		log.Printf("Master notification failed: %v", err)
 	}
 }
-
 
 func (d *dataNodeServer) DownloadFile(ctx context.Context, in *pb.FileDownloadRequest) (*pb.FileDownloadResponse, error) {
 	log.Printf("FileDownloadRequest %s", in.FileName)
@@ -124,11 +119,11 @@ func (d *dataNodeServer) sendHeartbeat() {
 	masterClient := pb.NewFileServiceClient(masterConn)
 
 	for {
-		time.Sleep(time.Second) 
+		time.Sleep(time.Second)
 
 		keepAliveRequest := &pb.KeepAliveRequest{
-			DataNode: fmt.Sprintf("%d", id), 
-			IsAlive:  1,                   
+			DataNode: fmt.Sprintf("%d", id),
+			IsAlive:  1,
 		}
 
 		_, err := masterClient.KeepAlive(context.Background(), keepAliveRequest)
@@ -141,15 +136,14 @@ func (d *dataNodeServer) Replicate(ctx context.Context, req *pb.ReplicateRequest
 
 	log.Printf("Replicating file: %s to %d node(s)", req.FileName, len(req.IpAddresses))
 
-
-    // Read the content of the file
+	// Read the content of the file
 	content, err := os.ReadFile(req.FilePath)
 	if err != nil {
 		return nil, fmt.Errorf("replication failed, cannot read file: %v", err)
 	}
 
-    // Iterate over the provided IP addresses and ports
-    for i, ip := range in.IpAddresses {
+	// Iterate over the provided IP addresses and ports
+	for i, ip := range req.IpAddresses {
 
 		addr := fmt.Sprintf("%s:%d", ip, req.PortNumbers[i])
 
@@ -162,7 +156,7 @@ func (d *dataNodeServer) Replicate(ctx context.Context, req *pb.ReplicateRequest
 
 		client := pb.NewFileServiceClient(conn)
 
-        // Invoke the UploadFile service
+		// Invoke the UploadFile service
 		_, err = client.UploadFile(ctx, &pb.FileUploadRequest{
 			FileName:    req.FileName,
 			FileContent: content,
@@ -173,24 +167,26 @@ func (d *dataNodeServer) Replicate(ctx context.Context, req *pb.ReplicateRequest
 			log.Printf("Replicated to %s", addr)
 		}
 
-    }
+	}
 
-    return &pb.ReplicateResponse{}, nil
+	return &pb.ReplicateResponse{}, nil
 }
 
-
 func main() {
+	var port string
+
+	fmt.Print("Enter port Number for datanode: ")
+	fmt.Scanf("%s %d", &port, &id)
 	lis, err := net.Listen("tcp", port)
 	if err != nil {
 		log.Fatalf("tcp listen fail %v", err)
 	}
 
-
 	grpcServer := grpc.NewServer(grpc.MaxRecvMsgSize(maxGRPCSize))
 	dataServer := &dataNodeServer{}
 	pb.RegisterFileServiceServer(grpcServer, dataServer)
-	log.Printf("DataNode running at %s", listenPort)
-	go grpcServer.Serve(listener) 
+	log.Printf("DataNode running at %s", lis.Addr())
+	go grpcServer.Serve(lis)
 
 	go dataServer.sendHeartbeat()
 	select {}
