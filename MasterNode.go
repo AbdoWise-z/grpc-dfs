@@ -224,17 +224,25 @@ func (s *server) replicationScheduler() {
 					liveNodeIndexes = append(liveNodeIndexes, i)
 				}
 			}
-			if len(liveNodeIndexes) < 2 && len(liveNodeIndexes) > 0 {
+			if len(liveNodeIndexes) < 3 && len(liveNodeIndexes) > 0 {
 
 				randomIndex := rand.Intn(len(liveNodeIndexes))
 				chosenNodeIndex := liveNodeIndexes[randomIndex]
 				sourceID := fileRecord.DataNodes[chosenNodeIndex]
+				//
 				var replicateIPs []string
 				var replicatePorts []int32
 				var replicateIds []int32
 				for i := 1; i <= 2; i++ {
+					// 0 , 1 , 2 , 3 , 4
+					// file originally in 0 and 2
+					// Source is a random ID that comes from the Datanodes that have the file record ?
+					// which i will replicate from
+					// source id = 2 , 2 + 1 = 3 % 3 = 0
+					// replicate = 2 + 2 = 4 % 3 = 1
 					replicateId := (sourceID + int32(i)) % int32(len(s.machineRecords))
 					isExist := false
+					// check on datanodes that have the filerecord
 					for _, node := range fileRecord.DataNodes {
 						if node == replicateId {
 							isExist = true
@@ -242,6 +250,7 @@ func (s *server) replicationScheduler() {
 						}
 					}
 					if !isExist && s.machineRecords[replicateId].Liveness {
+						// From my machines take the IP, PORT, ID to send the file to
 						replicateIPs = append(replicateIPs, s.machineRecords[replicateId].IPAddress)
 						replicatePorts = append(replicatePorts, s.machineRecords[replicateId].AvailablePorts[rand.Intn(len(s.machineRecords[replicateId].AvailablePorts))])
 						replicateIds = append(replicateIds, replicateId)
@@ -321,7 +330,7 @@ func main() {
 		lastKeepAliveMap: make(map[int]time.Time),
 	}
 
-	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50052}, false})
+	server.machineRecords = append(server.machineRecords, &MachineRecord{"192.168.1.6:", []int32{50052}, false})
 	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50053}, false})
 	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50054}, false})
 	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50055}, false})
@@ -343,3 +352,7 @@ func main() {
 		log.Fatalf("s.Serve fail %v", err)
 	}
 }
+
+// Server : Master/DataNode -> listen on port () <-
+// go routine : <-
+// Server/ master

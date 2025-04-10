@@ -145,7 +145,7 @@ func (d *dataNodeServer) Replicate(ctx context.Context, req *pb.ReplicateRequest
 	// Iterate over the provided IP addresses and ports
 	for i, ip := range req.IpAddresses {
 
-		addr := fmt.Sprintf("%s:%d", ip, req.PortNumbers[i])
+		addr := fmt.Sprintf("%s%d", ip, req.PortNumbers[i])
 
 		conn, err := grpc.Dial(addr, grpc.WithInsecure())
 		if err != nil {
