@@ -17,7 +17,8 @@ import (
 )
 
 const (
-	port             = ":50060"
+	portClient             = ":50060"
+	portDataNode           = ":50061"
 	keepAliveTimeout = 2 * time.Second
 )
 
@@ -71,7 +72,7 @@ func (s *server) HandleUploadFile(ctx context.Context, in *pb.HandleUploadFileRe
 
 	selectedMachine := aliveMachines[rand.Intn(len(aliveMachines))]
 
-	selectedPort := selectedMachine.AvailablePorts[rand.Intn(len(selectedMachine.AvailablePorts))]
+	selectedPort := selectedMachine.AvailablePorts[0]
 	selectedIP := selectedMachine.IPAddress
 
 	response := &pb.HandleUploadFileResponse{
@@ -98,7 +99,7 @@ func (s *server) HandleDownloadFile(ctx context.Context, in *pb.HandleDownloadFi
 		if s.machineRecords[nodeID].Liveness {
 			datanode := s.machineRecords[fileRecord.DataNodes[i]]
 			ipAddresses = append(ipAddresses, datanode.IPAddress)
-			portNumbers = append(portNumbers, datanode.AvailablePorts[rand.Intn(len(datanode.AvailablePorts))])
+			portNumbers = append(portNumbers, datanode.AvailablePorts[0])
 		}
 	}
 
@@ -173,7 +174,7 @@ func (s *server) NotifyUploaded(ctx context.Context, in *pb.NotifyUploadedReques
 		replicateId := (sourceID + int32(i)) % int32(len(s.machineRecords))
 		if s.machineRecords[replicateId].Liveness {
 			replicateIPs = append(replicateIPs, s.machineRecords[replicateId].IPAddress)
-			replicatePorts = append(replicatePorts, s.machineRecords[replicateId].AvailablePorts[rand.Intn(len(s.machineRecords[replicateId].AvailablePorts))])
+			replicatePorts = append(replicatePorts, s.machineRecords[replicateId].AvailablePorts[1])
 			replicateIds = append(replicateIds, replicateId)
 		}
 	}
@@ -187,7 +188,7 @@ func (s *server) NotifyUploaded(ctx context.Context, in *pb.NotifyUploadedReques
 
 	if s.machineRecords[sourceID].Liveness {
 		go func() {
-			clientAddress := fmt.Sprintf("%s%d", s.machineRecords[sourceID].IPAddress, s.machineRecords[sourceID].AvailablePorts[rand.Intn(len(s.machineRecords[sourceID].AvailablePorts))])
+			clientAddress := fmt.Sprintf("%s%d", s.machineRecords[sourceID].IPAddress, s.machineRecords[sourceID].AvailablePorts[2])
 			conn, err := grpc.Dial(clientAddress, grpc.WithInsecure())
 			if err != nil {
 				log.Printf("Dial source data node fail %v", err)
@@ -252,9 +253,9 @@ func (s *server) replicationScheduler() {
 					if !isExist && s.machineRecords[replicateId].Liveness {
 						// From my machines take the IP, PORT, ID to send the file to
 						replicateIPs = append(replicateIPs, s.machineRecords[replicateId].IPAddress)
-						replicatePorts = append(replicatePorts, s.machineRecords[replicateId].AvailablePorts[rand.Intn(len(s.machineRecords[replicateId].AvailablePorts))])
+						replicatePorts = append(replicatePorts, s.machineRecords[replicateId].AvailablePorts[1])
 						replicateIds = append(replicateIds, replicateId)
-					} else {
+					} else if(!s.machineRecords[replicateId].Liveness) {
 						log.Printf("machine %s not alive.", s.machineRecords[replicateId].IPAddress)
 					}
 				}
@@ -267,7 +268,7 @@ func (s *server) replicationScheduler() {
 				}
 				if s.machineRecords[sourceID].Liveness {
 
-					addr := fmt.Sprintf("%s%d", s.machineRecords[sourceID].IPAddress, s.machineRecords[sourceID].AvailablePorts[rand.Intn(len(s.machineRecords[sourceID].AvailablePorts))])
+					addr := fmt.Sprintf("%s%d", s.machineRecords[sourceID].IPAddress, s.machineRecords[sourceID].AvailablePorts[2])
 
 					conn, err := grpc.Dial(addr, grpc.WithInsecure())
 					if err != nil {
@@ -322,7 +323,7 @@ func (s *server) KeepAlive(ctx context.Context, in *pb.KeepAliveRequest) (*pb.Ke
 }
 
 func main() {
-	s := grpc.NewServer()
+	grpcServer := grpc.NewServer()
 
 	server := &server{
 		fileRecords:      make(map[string]*FileRecord),
@@ -330,27 +331,49 @@ func main() {
 		lastKeepAliveMap: make(map[int]time.Time),
 	}
 
-	server.machineRecords = append(server.machineRecords, &MachineRecord{"192.168.1.6:", []int32{50052}, false})
-	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50053}, false})
-	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50054}, false})
-	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50055}, false})
+	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50032,50042,50052}, false})
+	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50033,50043,50053}, false})
+	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50034,50044,50054}, false})
+	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50035,50045,50055}, false})
 
 	go server.monitorKeepAlive()
 
 	go server.replicationScheduler()
 
-	pb.RegisterFileServiceServer(s, server)
+	pb.RegisterFileServiceServer(grpcServer, server)
 
-	lis, err := net.Listen("tcp", port)
+
+	lisC, err := net.Listen("tcp", portClient)
 	if err != nil {
 		log.Fatalf("tcp listen fail: %v", err)
 	}
-	defer lis.Close()
+	defer lisC.Close()
 
-	log.Printf("listening on %s", port)
-	if err := s.Serve(lis); err != nil {
-		log.Fatalf("s.Serve fail %v", err)
+	lisD, err := net.Listen("tcp", portDataNode)
+	if err != nil {
+		log.Fatalf("tcp listen fail: %v", err)
 	}
+	defer lisD.Close()
+
+
+	go func(){
+		log.Printf("listening on %s", portClient)
+		if err := grpcServer.Serve(lisC); err != nil {
+			log.Fatalf("s.Serve fail %v", err)
+		}
+	}()
+
+	
+	go func(){
+		log.Printf("listening on %s", portDataNode)
+		if err := grpcServer.Serve(lisD); err != nil {
+			log.Fatalf("s.Serve fail %v", err)
+		}
+	}()
+
+	// Wait for both servers to be running
+	select {} // This will keep the main goroutine alive, allowing the servers to keep running
+
 }
 
 // Server : Master/DataNode -> listen on port () <-

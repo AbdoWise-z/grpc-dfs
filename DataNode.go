@@ -15,12 +15,14 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-var id int32
 
 const (
-	masterAddress = "localhost:50060" // Address of the master node
+	masterAddress = "localhost:50061" // Address of the master node
 	maxGRPCSize   = 1024 * 1024 * 100 // 100 MB
-
+	portForClient = ":50032"
+	portForDN     = ":50042"
+	portForMaster = ":50052"
+	id = 0
 )
 
 type dataNodeServer struct {
@@ -173,21 +175,38 @@ func (d *dataNodeServer) Replicate(ctx context.Context, req *pb.ReplicateRequest
 }
 
 func main() {
-	var port string
 
-	fmt.Print("Enter port Number for datanode: ")
-	fmt.Scanf("%s %d", &port, &id)
-	lis, err := net.Listen("tcp", port)
+	// fmt.Print("Enter portC, portD, and Id for datanode: ")
+	// fmt.Scanf("%s %s %d", &portForClient, &portForDN, &id)
+
+	lisC, err := net.Listen("tcp", portForClient)
+		if err != nil {
+			log.Fatalf("tcp portForClient listen fail %v", err)
+		}
+	lisD, err := net.Listen("tcp", portForDN)
+		if err != nil {
+			log.Fatalf("tcp portForDN listen fail %v", err)
+		}
+
+	lisMaster, err := net.Listen("tcp", portForMaster)
 	if err != nil {
-		log.Fatalf("tcp listen fail %v", err)
-	}
+		log.Fatalf("tcp portForM listen fail %v", err)
+	}	
+
 
 	grpcServer := grpc.NewServer(grpc.MaxRecvMsgSize(maxGRPCSize))
 	dataServer := &dataNodeServer{}
 	pb.RegisterFileServiceServer(grpcServer, dataServer)
-	log.Printf("DataNode running at %s", lis.Addr())
-	go grpcServer.Serve(lis)
+
+	// Start serving each listener in separate goroutines
+	go grpcServer.Serve(lisC)      // Serve on client port
+	go grpcServer.Serve(lisD)      // Serve on DataNode port
+	go grpcServer.Serve(lisMaster) // Serve on master port
 
 	go dataServer.sendHeartbeat()
+
+
+	log.Printf("DataNode running at %s for client and %s for DataNodes and %s for Master", lisC.Addr(),lisD.Addr(), lisMaster.Addr())
+
 	select {}
 }
