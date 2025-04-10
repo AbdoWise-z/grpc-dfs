@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package WL_Project;
+
+option go_package = "./proj";
+
+message FileUploadRequest {
+    string file_name = 1;
+    bytes file_content = 2;
+}
+
+message FileDownloadRequest {
+    string file_name = 1;
+}
+
+message FileUploadResponse {
+    string message = 1;
+}
+
+message FileDownloadResponse {
+    bytes file_content = 1;
+}
+
+message HandleUploadFileRequest {
+    string filename = 1;
+}
+
+message HandleUploadFileResponse {
+    int32 port_number = 1;
+    string ip_address=2;
+}
+
+message HandleDownloadFileRequest {
+    string file_name = 1;
+}
+
+message HandleDownloadFileResponse {
+    repeated string ip_address=1;
+    repeated int32 port_numbers = 2;
+}
+
+message NotifyUploadedRequest {
+    string file_name = 1;
+    int32 data_node = 2;
+    string file_path = 3;
+}
+
+message NotifyUploadedResponse {}
+
+message KeepAliveRequest {
+    string data_node = 1;
+    repeated int32 port_numbers  = 2;
+    int32 IsAlive=3;
+}
+
+message KeepAliveResponse {
+    string message = 1;
+}
+
+message SendNotificationRequest {
+    string message = 1;
+}
+
+message SendNotificationResponse {}
+
+message ReplicateRequest {
+    string file_name = 1;
+    string file_path = 2;
+    repeated string ip_addresses = 3;
+    repeated int32 port_numbers = 4;
+    repeated int32 ids=5;
+}
+
+message ReplicateResponse {}
+
+service FileService {
+    rpc UploadFile(FileUploadRequest) returns (FileUploadResponse);
+    rpc DownloadFile(FileDownloadRequest) returns (FileDownloadResponse);
+    rpc HandleUploadFile(HandleUploadFileRequest) returns (HandleUploadFileResponse);
+    rpc HandleDownloadFile(HandleDownloadFileRequest) returns (HandleDownloadFileResponse);
+    rpc NotifyUploaded(NotifyUploadedRequest) returns (NotifyUploadedResponse);
+    rpc KeepAlive(KeepAliveRequest) returns (KeepAliveResponse);
+    rpc SendNotification(SendNotificationRequest) returns (SendNotificationResponse);
+    rpc Replicate(ReplicateRequest) returns (ReplicateResponse);
+}
