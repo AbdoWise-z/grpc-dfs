@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	portClient             = ":50060"
-	portDataNode           = ":50061"
+	portClient       = ":50060"
+	portDataNode     = ":50061"
 	keepAliveTimeout = 2 * time.Second
 )
 
@@ -255,7 +255,7 @@ func (s *server) replicationScheduler() {
 						replicateIPs = append(replicateIPs, s.machineRecords[replicateId].IPAddress)
 						replicatePorts = append(replicatePorts, s.machineRecords[replicateId].AvailablePorts[1])
 						replicateIds = append(replicateIds, replicateId)
-					} else if(!s.machineRecords[replicateId].Liveness) {
+					} else if !s.machineRecords[replicateId].Liveness {
 						log.Printf("machine %s not alive.", s.machineRecords[replicateId].IPAddress)
 					}
 				}
@@ -331,17 +331,16 @@ func main() {
 		lastKeepAliveMap: make(map[int]time.Time),
 	}
 
-	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50032,50042,50052}, false})
-	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50033,50043,50053}, false})
-	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50034,50044,50054}, false})
-	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50035,50045,50055}, false})
+	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50032, 50042, 50052}, false})
+	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50033, 50043, 50053}, false})
+	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50034, 50044, 50054}, false})
+	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50035, 50045, 50055}, false})
 
 	go server.monitorKeepAlive()
 
 	go server.replicationScheduler()
 
 	pb.RegisterFileServiceServer(grpcServer, server)
-
 
 	lisC, err := net.Listen("tcp", portClient)
 	if err != nil {
@@ -355,16 +354,14 @@ func main() {
 	}
 	defer lisD.Close()
 
-
-	go func(){
+	go func() {
 		log.Printf("listening on %s", portClient)
 		if err := grpcServer.Serve(lisC); err != nil {
 			log.Fatalf("s.Serve fail %v", err)
 		}
 	}()
 
-	
-	go func(){
+	go func() {
 		log.Printf("listening on %s", portDataNode)
 		if err := grpcServer.Serve(lisD); err != nil {
 			log.Fatalf("s.Serve fail %v", err)

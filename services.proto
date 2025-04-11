@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package WL_Project;
 
-option go_package = "./proj";
+option go_package = "./Services";
 
 message FileUploadRequest {
     string file_name = 1;
@@ -49,8 +49,9 @@ message NotifyUploadedResponse {}
 
 message KeepAliveRequest {
     string data_node = 1;
-    repeated int32 port_numbers  = 2;
-    int32 IsAlive=3;
+    string data_node_address = 2;
+    int32 port_numbers  = 3;
+    int32 IsAlive=4;
 }
 
 message KeepAliveResponse {
