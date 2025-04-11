@@ -1,0 +1,7 @@
+{
+    "IP":"localhost",
+    "MasterNodePort": ":50032",
+    "ClientNodePort": ":50042",
+    "DataNodePort": ":50052",
+    "ID": 0
+}
