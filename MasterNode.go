@@ -199,7 +199,7 @@ func (s *server) NotifyUploaded(ctx context.Context, in *pb.NotifyUploadedReques
 
 	if s.machineRecords[sourceID].Liveness {
 		go func() {
-			clientAddress := fmt.Sprintf("%s%d", s.machineRecords[sourceID].IPAddress, s.machineRecords[sourceID].MasterNodePort)
+			clientAddress := fmt.Sprintf("%s:%d", s.machineRecords[sourceID].IPAddress, s.machineRecords[sourceID].MasterNodePort)
 			conn, err := grpc.Dial(clientAddress, grpc.WithInsecure())
 			if err != nil {
 				log.Printf("Dial source data node fail %v", err)
@@ -279,7 +279,7 @@ func (s *server) replicationScheduler() {
 				}
 				if s.machineRecords[sourceID].Liveness {
 
-					addr := fmt.Sprintf("%s%d", s.machineRecords[sourceID].IPAddress, s.machineRecords[sourceID].MasterNodePort)
+					addr := fmt.Sprintf("%s:%d", s.machineRecords[sourceID].IPAddress, s.machineRecords[sourceID].MasterNodePort)
 
 					conn, err := grpc.Dial(addr, grpc.WithInsecure())
 					if err != nil {

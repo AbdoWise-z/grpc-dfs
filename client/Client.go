@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net"
 	"os"
 	"path/filepath"
 	pb "proj/Services"
@@ -32,9 +33,24 @@ func (c *ClientServer) SendNotification(ctx context.Context, req *pb.SendNotific
 	fmt.Printf("Notificatoin from master: %s\n", req.Message)
 	return &pb.SendNotificationResponse{}, nil
 }
+func startClientServer() {
+	listener, err := net.Listen("tcp", clientAddress)
+	if err != nil {
+		log.Fatalf("Failed to initialize client listener: %v", err)
+	}
+	defer listener.Close()
 
+	grpcServer := grpc.NewServer()
+	pb.RegisterFileServiceServer(grpcServer, &ClientServer{})
+
+	log.Printf("Client notification server running on %s", clientAddress)
+	if err := grpcServer.Serve(listener); err != nil {
+		log.Fatalf("Client server error: %v", err)
+	}
+}
 func main() {
 	// Launch client-side gRPC server for notifications
+	go startClientServer()
 
 	md := metadata.Pairs("client-ip", "localhost", "client-port", "12345")
 	ctx := metadata.NewOutgoingContext(context.Background(), md)
@@ -47,7 +63,7 @@ func main() {
 	masterClient := pb.NewFileServiceClient(masterConn)
 
 	for {
-		fmt.Print("'u', 'd', or 'e'")
+		fmt.Print("Please enter u to Upload, d to Download, e to Exit\n")
 		reader := bufio.NewReader(os.Stdin)
 		answer, err := reader.ReadString('\n')
 		if err != nil {
@@ -75,11 +91,13 @@ func main() {
 // Upload file to the distributed system
 func uploadFile(ctx context.Context, masterClient pb.FileServiceClient) {
 
-	var fileName string
-	fmt.Print("Enter file name (without extension): ")
-	fmt.Scanln(&fileName)
+	var filePath string
+	fmt.Print("Enter file path ")
+	fmt.Scanln(&filePath)
 
-	filePath := filepath.Join(fileStoragePath, fileName+".mp4")
+	splitted_file := strings.Split(filePath, "/")
+	fileName := splitted_file[len(splitted_file)-1]
+
 	fileData, err := os.ReadFile(filePath)
 	if err != nil {
 		log.Fatalf("Error reading file: %v", err)
@@ -91,7 +109,7 @@ func uploadFile(ctx context.Context, masterClient pb.FileServiceClient) {
 		log.Fatalf("Failed to get upload details: %v", err)
 	}
 
-	dataNodeAddr := fmt.Sprintf("%s%d", response.IpAddress, response.PortNumber)
+	dataNodeAddr := fmt.Sprintf("%s:%d", response.IpAddress, response.PortNumber)
 	fmt.Println("Uploading to:", dataNodeAddr)
 
 	// Connect to DataNode
@@ -141,7 +159,7 @@ func downloadFile(ctx context.Context, masterClient pb.FileServiceClient) {
 	}
 
 	selectedIndex := rand.Intn(availableNodes)
-	dataNodeAddr := fmt.Sprintf("%s%d", response.IpAddress[selectedIndex], response.PortNumbers[selectedIndex])
+	dataNodeAddr := fmt.Sprintf("%s:%d", response.IpAddress[selectedIndex], response.PortNumbers[selectedIndex])
 	fmt.Println("Downloading from:", dataNodeAddr)
 
 	// Connect to DataNode
@@ -161,7 +179,7 @@ func downloadFile(ctx context.Context, masterClient pb.FileServiceClient) {
 	}
 
 	// Save downloaded file
-	filePath := filepath.Join(downloadDir, fileName+".mp4")
+	filePath := filepath.Join(downloadDir, fileName)
 	if err := os.WriteFile(filePath, downloadResponse.FileContent, 0644); err != nil {
 		log.Fatalf("Failed to save downloaded file: %v", err)
 	}

@@ -48,13 +48,13 @@ func (d *DataNodeServer) UploadFile(ctx context.Context, req *pb.FileUploadReque
 	outCtx := metadata.NewOutgoingContext(context.Background(), outMeta)
 
 	// Save directory for this DataNode
-	nodeDir := fmt.Sprintf("./uploaded_%d", d.ID)
+	nodeDir := fmt.Sprintf("./uploaded_%s", d.PortForClient)
 	if err := os.MkdirAll(nodeDir, 0755); err != nil {
 		return nil, fmt.Errorf("error creating upload dir: %v", err)
 	}
 
 	// File saving path
-	savePath := filepath.Join(nodeDir, req.FileName+".mp4")
+	savePath := filepath.Join(nodeDir, req.FileName)
 	file, err := os.Create(savePath)
 	if err != nil {
 		return nil, fmt.Errorf("error creating file: %v", err)
@@ -99,9 +99,9 @@ func notifyMasterOfUpload(d *DataNodeServer, ctx context.Context, filename, path
 
 func (d *DataNodeServer) DownloadFile(ctx context.Context, in *pb.FileDownloadRequest) (*pb.FileDownloadResponse, error) {
 	log.Printf("FileDownloadRequest %s", in.FileName)
-	dir := fmt.Sprintf("./uploaded_%d", d.ID)
+	dir := fmt.Sprintf("./uploaded_%s", d.PortForClient)
 
-	filePath := filepath.Join(dir, in.FileName+".mp4")
+	filePath := filepath.Join(dir, in.FileName)
 
 	fileContent, err := os.ReadFile(filePath)
 	if err != nil {
@@ -151,7 +151,7 @@ func (d *DataNodeServer) Replicate(ctx context.Context, req *pb.ReplicateRequest
 	// Iterate over the provided IP addresses and ports
 	for i, ip := range req.IpAddresses {
 
-		addr := fmt.Sprintf("%s%d", ip, req.PortNumbers[i])
+		addr := fmt.Sprintf("%s:%d", ip, req.PortNumbers[i])
 
 		conn, err := grpc.Dial(addr, grpc.WithInsecure())
 		if err != nil {
