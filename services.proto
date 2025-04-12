@@ -48,10 +48,9 @@ message NotifyUploadedRequest {
 message NotifyUploadedResponse {}
 
 message KeepAliveRequest {
-    string data_node = 1;
-    string data_node_address = 2;
-    int32 port_numbers  = 3;
-    int32 IsAlive=4;
+    string data_node_IP = 1;
+    repeated string port_number  = 2;
+    bool IsAlive=3;
 }
 
 message KeepAliveResponse {

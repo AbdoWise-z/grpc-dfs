@@ -74,6 +74,7 @@ func main() {
 
 // Upload file to the distributed system
 func uploadFile(ctx context.Context, masterClient pb.FileServiceClient) {
+
 	var fileName string
 	fmt.Print("Enter file name (without extension): ")
 	fmt.Scanln(&fileName)

@@ -1,5 +1,5 @@
 {
-    "IP":"localhost",
+    
     "MasterNodePort": ":50035",
     "ClientNodePort": ":50045",
     "DataNodePort": ":50055",

@@ -30,7 +30,9 @@ type FileRecord struct {
 
 type MachineRecord struct {
 	IPAddress      string
-	AvailablePorts []int32
+	MasterNodePort int32
+	ClientNodePort int32
+	DataNodePort   int32
 	Liveness       bool
 }
 
@@ -45,7 +47,8 @@ type server struct {
 func (s *server) PrintMachineRecords() {
 	fmt.Println("Machine Records:")
 	for i, record := range s.machineRecords {
-		fmt.Printf("Machine %d:\n  IP: %s\n  Alive: %t\n  Ports: %v\n", i, record.IPAddress, record.Liveness, record.AvailablePorts)
+		AvailablePorts := []int32{record.MasterNodePort, record.ClientNodePort, record.DataNodePort}
+		fmt.Printf("Machine %d:\n  IP: %s\n  Alive: %t\n  Ports: %v\n", i, record.IPAddress, record.Liveness, AvailablePorts)
 	}
 }
 
@@ -56,23 +59,28 @@ func (s *server) PrintFileRecords() {
 	}
 }
 
+/*
+Client Initialization intent to upload file
+*/
 func (s *server) HandleUploadFile(ctx context.Context, in *pb.HandleUploadFileRequest) (*pb.HandleUploadFileResponse, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-
+	// a map of the alive machines from the present DataNodes registered to our system
 	aliveMachines := make([]*MachineRecord, 0)
+
 	for _, machine := range s.machineRecords {
 		if machine.Liveness {
 			aliveMachines = append(aliveMachines, machine)
 		}
 	}
+	// we can't accept upload requests right now since no datanodes online
 	if len(aliveMachines) == 0 {
 		return nil, errors.New("no aliveMachines")
 	}
 
 	selectedMachine := aliveMachines[rand.Intn(len(aliveMachines))]
 
-	selectedPort := selectedMachine.AvailablePorts[0]
+	selectedPort := selectedMachine.ClientNodePort
 	selectedIP := selectedMachine.IPAddress
 
 	response := &pb.HandleUploadFileResponse{
@@ -83,6 +91,9 @@ func (s *server) HandleUploadFile(ctx context.Context, in *pb.HandleUploadFileRe
 	return response, nil
 }
 
+/*
+Client Initialization intent to download file
+*/
 func (s *server) HandleDownloadFile(ctx context.Context, in *pb.HandleDownloadFileRequest) (*pb.HandleDownloadFileResponse, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -99,7 +110,7 @@ func (s *server) HandleDownloadFile(ctx context.Context, in *pb.HandleDownloadFi
 		if s.machineRecords[nodeID].Liveness {
 			datanode := s.machineRecords[fileRecord.DataNodes[i]]
 			ipAddresses = append(ipAddresses, datanode.IPAddress)
-			portNumbers = append(portNumbers, datanode.AvailablePorts[0])
+			portNumbers = append(portNumbers, datanode.ClientNodePort)
 		}
 	}
 
@@ -174,7 +185,7 @@ func (s *server) NotifyUploaded(ctx context.Context, in *pb.NotifyUploadedReques
 		replicateId := (sourceID + int32(i)) % int32(len(s.machineRecords))
 		if s.machineRecords[replicateId].Liveness {
 			replicateIPs = append(replicateIPs, s.machineRecords[replicateId].IPAddress)
-			replicatePorts = append(replicatePorts, s.machineRecords[replicateId].AvailablePorts[1])
+			replicatePorts = append(replicatePorts, s.machineRecords[replicateId].DataNodePort)
 			replicateIds = append(replicateIds, replicateId)
 		}
 	}
@@ -188,7 +199,7 @@ func (s *server) NotifyUploaded(ctx context.Context, in *pb.NotifyUploadedReques
 
 	if s.machineRecords[sourceID].Liveness {
 		go func() {
-			clientAddress := fmt.Sprintf("%s%d", s.machineRecords[sourceID].IPAddress, s.machineRecords[sourceID].AvailablePorts[2])
+			clientAddress := fmt.Sprintf("%s%d", s.machineRecords[sourceID].IPAddress, s.machineRecords[sourceID].MasterNodePort)
 			conn, err := grpc.Dial(clientAddress, grpc.WithInsecure())
 			if err != nil {
 				log.Printf("Dial source data node fail %v", err)
@@ -253,7 +264,7 @@ func (s *server) replicationScheduler() {
 					if !isExist && s.machineRecords[replicateId].Liveness {
 						// From my machines take the IP, PORT, ID to send the file to
 						replicateIPs = append(replicateIPs, s.machineRecords[replicateId].IPAddress)
-						replicatePorts = append(replicatePorts, s.machineRecords[replicateId].AvailablePorts[1])
+						replicatePorts = append(replicatePorts, s.machineRecords[replicateId].DataNodePort)
 						replicateIds = append(replicateIds, replicateId)
 					} else if !s.machineRecords[replicateId].Liveness {
 						log.Printf("machine %s not alive.", s.machineRecords[replicateId].IPAddress)
@@ -268,7 +279,7 @@ func (s *server) replicationScheduler() {
 				}
 				if s.machineRecords[sourceID].Liveness {
 
-					addr := fmt.Sprintf("%s%d", s.machineRecords[sourceID].IPAddress, s.machineRecords[sourceID].AvailablePorts[2])
+					addr := fmt.Sprintf("%s%d", s.machineRecords[sourceID].IPAddress, s.machineRecords[sourceID].MasterNodePort)
 
 					conn, err := grpc.Dial(addr, grpc.WithInsecure())
 					if err != nil {
@@ -300,6 +311,7 @@ func (s *server) monitorKeepAlive() {
 		case <-ticker.C:
 			s.mutex.Lock()
 			for nodeID, lastTime := range s.lastKeepAliveMap {
+
 				active := time.Since(lastTime) < keepAliveTimeout
 				s.machineRecords[nodeID].Liveness = active
 
@@ -309,15 +321,44 @@ func (s *server) monitorKeepAlive() {
 		}
 	}
 }
-
-func (s *server) KeepAlive(ctx context.Context, in *pb.KeepAliveRequest) (*pb.KeepAliveResponse, error) {
-	nodeID, err := strconv.Atoi(in.DataNode)
-	if err != nil {
-		return nil, fmt.Errorf("coversion to int fail %v", err)
+func (s *server) AddDataNodeMachine(DataNode_IP string, PortNumbers []string) {
+	// Order of ports : []string{d.PortForMaster, d.PortForClient, d.PortForDN},
+	var DataNodePorts []int32
+	for _, port := range PortNumbers {
+		nodePortNum, err := strconv.Atoi(port[1:])
+		DataNodePorts = append(DataNodePorts, int32(nodePortNum))
+		if err != nil {
+			log.Fatalf("couldn't extract port number exiting %s", port)
+		}
 	}
-	log.Printf("Data node %d KeepAlive sent", nodeID)
+
+	s.machineRecords = append(s.machineRecords, &MachineRecord{DataNode_IP, DataNodePorts[0],
+		DataNodePorts[1], DataNodePorts[2], true})
+}
+func (s *server) KeepAlive(ctx context.Context, in *pb.KeepAliveRequest) (*pb.KeepAliveResponse, error) {
+	var nodeID int
+	nodeIP := in.DataNode_IP
 	s.mutex.Lock()
+	isExist := false
+
+	for i, machinerecord := range s.machineRecords {
+		if fmt.Sprintf("%s:%d", machinerecord.IPAddress,
+			machinerecord.MasterNodePort) == in.DataNode_IP+in.PortNumber[0] {
+			// we found the datanode that sent the heartbeat
+			// && seems like it went off then on
+			isExist = true
+			nodeID = i
+			break
+		}
+	}
+	if !isExist {
+		nodeID = len(s.machineRecords)
+		s.AddDataNodeMachine(nodeIP, in.PortNumber)
+	}
+	log.Printf("Data node with ID %d KeepAlive sent", nodeID)
+
 	s.lastKeepAliveMap[nodeID] = time.Now()
+
 	defer s.mutex.Unlock()
 	return &pb.KeepAliveResponse{}, nil
 }
@@ -330,12 +371,6 @@ func main() {
 		machineRecords:   []*MachineRecord{},
 		lastKeepAliveMap: make(map[int]time.Time),
 	}
-
-	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50032, 50042, 50052}, false})
-	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50033, 50043, 50053}, false})
-	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50034, 50044, 50054}, false})
-	server.machineRecords = append(server.machineRecords, &MachineRecord{"localhost:", []int32{50035, 50045, 50055}, false})
-
 	go server.monitorKeepAlive()
 
 	go server.replicationScheduler()

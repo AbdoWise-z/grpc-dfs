@@ -22,7 +22,7 @@ const (
 )
 
 type DataNodeServer struct {
-	IP            string `json:"IP"`
+	IP            string
 	PortForMaster string `json:"MasterNodePort"`
 	PortForClient string `json:"ClientNodePort"`
 	PortForDN     string `json:"DataNodePort"`
@@ -30,8 +30,9 @@ type DataNodeServer struct {
 	pb.UnimplementedFileServiceServer
 }
 
-// Handles file upload from a client node
-
+/*
+Handles file upload from client
+*/
 func (d *DataNodeServer) UploadFile(ctx context.Context, req *pb.FileUploadRequest) (*pb.FileUploadResponse, error) {
 	log.Printf("Received upload request for: %s", req.FileName)
 
@@ -114,19 +115,21 @@ func (d *DataNodeServer) DownloadFile(ctx context.Context, in *pb.FileDownloadRe
 }
 
 func (d *DataNodeServer) sendHeartbeat() {
+
 	masterConn, err := grpc.Dial(masterAddress, grpc.WithInsecure())
+
 	if err != nil {
 		log.Fatalf("Cannot connect to Master %v", err)
 	}
 	defer masterConn.Close()
 	masterClient := pb.NewFileServiceClient(masterConn)
-
 	for {
-		time.Sleep(time.Second)
 
+		time.Sleep(time.Second)
 		keepAliveRequest := &pb.KeepAliveRequest{
-			DataNode: fmt.Sprintf("%d", d.ID),
-			IsAlive:  1,
+			DataNode_IP: d.IP,
+			PortNumber:  []string{d.PortForMaster, d.PortForClient, d.PortForDN},
+			IsAlive:     true,
 		}
 
 		_, err := masterClient.KeepAlive(context.Background(), keepAliveRequest)
@@ -175,24 +178,58 @@ func (d *DataNodeServer) Replicate(ctx context.Context, req *pb.ReplicateRequest
 	return &pb.ReplicateResponse{}, nil
 }
 
-func main() {
+/*
+This function extracts the local IP that the data node runs on
+*/
+func GetMachineIP() (string, error) {
+	// get the network interfaces within machine (ethernet0, wifi ..)
+	addrs, err := net.InterfaceAddrs()
 
+	if err != nil {
+		return "", err
+	}
+
+	for _, addr := range addrs {
+		// Check the address type and skip loopback
+		// loopback is virtual network that computer use to communicate to itself aka 127.0.0.1
+		// so we don't need that since datanodes will run on external physical machines
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			// is it ipv4 type ?
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String(), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no non-loopback IP address found")
+}
+
+func main() {
+	// the config file must be passed
 	if len(os.Args) < 2 {
 		log.Fatalf("Please pass the dataNode configuration file by terminal")
 	}
+
 	config_file_path := os.Args[1]
 	config, err := os.ReadFile(config_file_path)
 	if err != nil {
 		log.Fatalf("couldn't read the file specified")
 	}
 
-	dataServer := &DataNodeServer{}
-
+	ip, err := GetMachineIP()
+	if err != nil {
+		fmt.Println("Error in extracting IP of machine", err)
+	}
+	// Start to configure our data node server
+	dataServer := &DataNodeServer{
+		IP: ip,
+	}
+	// parse the json configuration to the data Node server
 	err = json.Unmarshal(config, dataServer)
 	if err != nil {
 		log.Fatalf("couldn't parse config file")
 	}
 
+	// open TCP ports for future connections with Master, Client, DataNodes
 	lisC, err := net.Listen("tcp", dataServer.PortForClient)
 	if err != nil {
 		log.Fatalf("tcp portForClient listen fail %v", err)
@@ -207,6 +244,7 @@ func main() {
 		log.Fatalf("tcp portForM listen fail %v", err)
 	}
 
+	// create a Grpc server and bind our data node server to it
 	grpcServer := grpc.NewServer(grpc.MaxRecvMsgSize(maxGRPCSize))
 	pb.RegisterFileServiceServer(grpcServer, dataServer)
 
@@ -214,10 +252,10 @@ func main() {
 	go grpcServer.Serve(lisC)      // Serve on client port
 	go grpcServer.Serve(lisD)      // Serve on DataNode port
 	go grpcServer.Serve(lisMaster) // Serve on master port
-
+	// tell the master I'm online
 	go dataServer.sendHeartbeat()
 
 	log.Printf("DataNode running at %s for client and %s for DataNodes and %s for Master", lisC.Addr(), lisD.Addr(), lisMaster.Addr())
-
+	// blocker so that the code doesn't terminate
 	select {}
 }
