@@ -48,7 +48,7 @@ func (d *DataNodeServer) UploadFile(ctx context.Context, req *pb.FileUploadReque
 	outCtx := metadata.NewOutgoingContext(context.Background(), outMeta)
 
 	// Save directory for this DataNode
-	nodeDir := fmt.Sprintf("./uploaded_%s", d.PortForClient)
+	nodeDir := fmt.Sprintf("./uploaded_%s:%s", d.IP, d.PortForClient)
 	if err := os.MkdirAll(nodeDir, 0755); err != nil {
 		return nil, fmt.Errorf("error creating upload dir: %v", err)
 	}
@@ -99,7 +99,7 @@ func notifyMasterOfUpload(d *DataNodeServer, ctx context.Context, filename, path
 
 func (d *DataNodeServer) DownloadFile(ctx context.Context, in *pb.FileDownloadRequest) (*pb.FileDownloadResponse, error) {
 	log.Printf("FileDownloadRequest %s", in.FileName)
-	dir := fmt.Sprintf("./uploaded_%s", d.PortForClient)
+	dir := fmt.Sprintf("./uploaded_%s:%s", d.IP, d.PortForClient)
 
 	filePath := filepath.Join(dir, in.FileName)
 
@@ -183,24 +183,47 @@ This function extracts the local IP that the data node runs on
 */
 func GetMachineIP() (string, error) {
 	// get the network interfaces within machine (ethernet0, wifi ..)
-	addrs, err := net.InterfaceAddrs()
-
+	ifaces, err := net.Interfaces()
 	if err != nil {
 		return "", err
 	}
 
-	for _, addr := range addrs {
-		// Check the address type and skip loopback
-		// loopback is virtual network that computer use to communicate to itself aka 127.0.0.1
-		// so we don't need that since datanodes will run on external physical machines
-		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			// is it ipv4 type ?
-			if ipnet.IP.To4() != nil {
-				return ipnet.IP.String(), nil
+	for _, iface := range ifaces {
+		// Skip down or loopback interfaces
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			var ip net.IP
+
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
 			}
+
+			if ip == nil || ip.IsLoopback() {
+				continue
+			}
+
+			ip = ip.To4()
+			if ip == nil {
+				continue // not an IPv4 address
+			}
+
+			// Found a valid IPv4 on an active, non-loopback interface
+			return ip.String(), nil
 		}
 	}
-	return "", fmt.Errorf("no non-loopback IP address found")
+
+	return "", fmt.Errorf("no suitable IP address found")
 }
 
 func main() {
