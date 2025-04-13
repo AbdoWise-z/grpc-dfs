@@ -182,11 +182,29 @@ func (s *server) NotifyUploaded(ctx context.Context, in *pb.NotifyUploadedReques
 	var replicateIds []int32
 
 	for i := 1; i <= 2; i++ {
+		// 0 , 1 , 2 , 3 , 4
+		// file originally in 0 and 2
+		// Source is a random ID that comes from the Datanodes that have the file record ?
+		// which i will replicate from
+		// source id = 2 , 2 + 1 = 3 % 3 = 0
+		// replicate = 2 + 2 = 4 % 3 = 1
 		replicateId := (sourceID + int32(i)) % int32(len(s.machineRecords))
-		if s.machineRecords[replicateId].Liveness {
+		isExist := false
+		// check on datanodes that have the filerecord
+		for _, node := range s.fileRecords[in.FileName].DataNodes {
+
+			if node == replicateId {
+				isExist = true
+				break
+			}
+		}
+		if !isExist && s.machineRecords[replicateId].Liveness {
+			// From my machines take the IP, PORT, ID to send the file to
 			replicateIPs = append(replicateIPs, s.machineRecords[replicateId].IPAddress)
 			replicatePorts = append(replicatePorts, s.machineRecords[replicateId].DataNodePort)
 			replicateIds = append(replicateIds, replicateId)
+		} else if !s.machineRecords[replicateId].Liveness {
+			log.Printf("machine %s not alive.", s.machineRecords[replicateId].IPAddress)
 		}
 	}
 	replicateRequest := &pb.ReplicateRequest{
@@ -226,6 +244,7 @@ func (s *server) NotifyUploaded(ctx context.Context, in *pb.NotifyUploadedReques
 
 func (s *server) replicationScheduler() {
 	for {
+
 		time.Sleep(10 * time.Second)
 		s.mutex.Lock()
 
@@ -241,6 +260,7 @@ func (s *server) replicationScheduler() {
 				randomIndex := rand.Intn(len(liveNodeIndexes))
 				chosenNodeIndex := liveNodeIndexes[randomIndex]
 				sourceID := fileRecord.DataNodes[chosenNodeIndex]
+
 				//
 				var replicateIPs []string
 				var replicatePorts []int32
@@ -256,6 +276,7 @@ func (s *server) replicationScheduler() {
 					isExist := false
 					// check on datanodes that have the filerecord
 					for _, node := range fileRecord.DataNodes {
+
 						if node == replicateId {
 							isExist = true
 							break
@@ -315,7 +336,7 @@ func (s *server) monitorKeepAlive() {
 				active := time.Since(lastTime) < keepAliveTimeout
 				s.machineRecords[nodeID].Liveness = active
 
-				log.Printf("DataNode #%d Active: %t", nodeID, active)
+				// log.Printf("DataNode #%d Active: %t", nodeID, active)
 			}
 			s.mutex.Unlock()
 		}
@@ -355,7 +376,7 @@ func (s *server) KeepAlive(ctx context.Context, in *pb.KeepAliveRequest) (*pb.Ke
 		nodeID = len(s.machineRecords)
 		s.AddDataNodeMachine(nodeIP, in.PortNumber)
 	}
-	log.Printf("Data node with ID %d KeepAlive sent", nodeID)
+	// log.Printf("Data node with ID %d KeepAlive sent", nodeID)
 
 	s.lastKeepAliveMap[nodeID] = time.Now()
 

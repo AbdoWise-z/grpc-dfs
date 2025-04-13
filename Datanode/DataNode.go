@@ -48,7 +48,7 @@ func (d *DataNodeServer) UploadFile(ctx context.Context, req *pb.FileUploadReque
 	outCtx := metadata.NewOutgoingContext(context.Background(), outMeta)
 
 	// Save directory for this DataNode
-	nodeDir := fmt.Sprintf("./uploaded_%s:%s", d.IP, d.PortForClient)
+	nodeDir := fmt.Sprintf("./uploaded_%s_%s", d.IP, d.PortForClient[1:])
 	if err := os.MkdirAll(nodeDir, 0755); err != nil {
 		return nil, fmt.Errorf("error creating upload dir: %v", err)
 	}
@@ -99,7 +99,7 @@ func notifyMasterOfUpload(d *DataNodeServer, ctx context.Context, filename, path
 
 func (d *DataNodeServer) DownloadFile(ctx context.Context, in *pb.FileDownloadRequest) (*pb.FileDownloadResponse, error) {
 	log.Printf("FileDownloadRequest %s", in.FileName)
-	dir := fmt.Sprintf("./uploaded_%s:%s", d.IP, d.PortForClient)
+	dir := fmt.Sprintf("./uploaded_%s_%s", d.IP, d.PortForClient[1:])
 
 	filePath := filepath.Join(dir, in.FileName)
 
