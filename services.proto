@@ -74,8 +74,12 @@ message ReplicateRequest {
 message ReplicateResponse {}
 
 service FileService {
-    rpc UploadFile(FileUploadRequest) returns (FileUploadResponse);
+    rpc BeginUploadFile(FileUploadRequest) returns (FileUploadResponse);
+    rpc UpdateUploadFile(FileUploadRequest) returns (FileUploadResponse);
+    rpc EndUploadFile(FileUploadRequest) returns (FileUploadResponse);
+
     rpc DownloadFile(FileDownloadRequest) returns (FileDownloadResponse);
+
     rpc HandleUploadFile(HandleUploadFileRequest) returns (HandleUploadFileResponse);
     rpc HandleDownloadFile(HandleDownloadFileRequest) returns (HandleDownloadFileResponse);
     rpc NotifyUploaded(NotifyUploadedRequest) returns (NotifyUploadedResponse);

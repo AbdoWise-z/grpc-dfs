@@ -88,31 +88,33 @@ func main() {
 	}
 }
 
-// Upload file to the distributed system
-func uploadFile(ctx context.Context, masterClient pb.FileServiceClient) {
+const chunkSize = 1024 * 1024 // 1MB
 
+func uploadFile(ctx context.Context, masterClient pb.FileServiceClient) {
 	var filePath string
-	fmt.Print("Enter file path ")
+	fmt.Print("Enter file path: ")
 	fmt.Scanln(&filePath)
 
-	splitted_file := strings.Split(filePath, "/")
-	fileName := splitted_file[len(splitted_file)-1]
+	// Extract file name from the full path
+	splittedFile := strings.Split(filePath, "/")
+	fileName := splittedFile[len(splittedFile)-1]
 
+	// Read file content
 	fileData, err := os.ReadFile(filePath)
 	if err != nil {
 		log.Fatalf("Error reading file: %v", err)
 	}
+	totalSize := len(fileData)
 
 	// Request upload destination from master
 	response, err := masterClient.HandleUploadFile(ctx, &pb.HandleUploadFileRequest{})
 	if err != nil {
 		log.Fatalf("Failed to get upload details: %v", err)
 	}
-
 	dataNodeAddr := fmt.Sprintf("%s:%d", response.IpAddress, response.PortNumber)
 	fmt.Println("Uploading to:", dataNodeAddr)
 
-	// Connect to DataNode
+	// Connect to the DataNode
 	dataConn, err := grpc.Dial(dataNodeAddr, grpc.WithInsecure(), grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(1024*1024*100)))
 	if err != nil {
 		log.Fatalf("Could not connect to DataNode: %v", err)
@@ -120,13 +122,41 @@ func uploadFile(ctx context.Context, masterClient pb.FileServiceClient) {
 	defer dataConn.Close()
 	dataClient := pb.NewFileServiceClient(dataConn)
 
-	// Upload file to DataNode
-	uploadResponse, err := dataClient.UploadFile(ctx, &pb.FileUploadRequest{
-		FileName:    fileName,
-		FileContent: fileData,
+	// STEP 1: Begin upload session
+	_, err = dataClient.BeginUploadFile(ctx, &pb.FileUploadRequest{FileName: fileName})
+	if err != nil {
+		log.Fatalf("BeginUpload failed: %v", err)
+	}
+	fmt.Printf("Started upload for %s (%d bytes)\n", fileName, totalSize)
+
+	// STEP 2: Upload file in chunks with progress indicator
+	for offset := 0; offset < totalSize; offset += chunkSize {
+		end := offset + chunkSize
+		if end > totalSize {
+			end = totalSize
+		}
+		chunk := fileData[offset:end]
+
+		_, err = dataClient.UpdateUploadFile(ctx, &pb.FileUploadRequest{
+			FileName:    fileName,
+			FileContent: chunk,
+		})
+		if err != nil {
+			log.Fatalf("UpdateUpload failed at offset %d: %v", offset, err)
+		}
+
+		// Print progress indicator
+		progress := float64(end) / float64(totalSize) * 100
+		fmt.Printf("\rUploading: [%-50s] %.2f%%", strings.Repeat("=", int(progress/2)), progress)
+	}
+	fmt.Println("\nUpload complete. Finalizing upload session...")
+
+	// STEP 3: End upload session
+	uploadResponse, err := dataClient.EndUploadFile(ctx, &pb.FileUploadRequest{
+		FileName: fileName,
 	})
 	if err != nil {
-		log.Fatalf("File upload failed: %v", err)
+		log.Fatalf("EndUpload failed: %v", err)
 	}
 	fmt.Println("Upload response:", uploadResponse.Message)
 }

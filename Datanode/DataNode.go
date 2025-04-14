@@ -28,6 +28,7 @@ type DataNodeServer struct {
 	PortForDN     string `json:"DataNodePort"`
 	ID            int32  `json:"ID"`
 	pb.UnimplementedFileServiceServer
+	openFiles map[string]*os.File
 }
 
 /*
@@ -77,6 +78,151 @@ func (d *DataNodeServer) UploadFile(ctx context.Context, req *pb.FileUploadReque
 	return &pb.FileUploadResponse{Message: "Upload successful"}, nil
 }
 
+const chunkSize = 1024 * 1024 // 1MB chunk size
+
+func (d *DataNodeServer) Replicate(ctx context.Context, req *pb.ReplicateRequest) (*pb.ReplicateResponse, error) {
+	log.Printf("Replicating file: %s to %d node(s)", req.FileName, len(req.IpAddresses))
+
+	// Read the file content
+	content, err := os.ReadFile(req.FilePath)
+	if err != nil {
+		return nil, fmt.Errorf("replication failed, cannot read file: %v", err)
+	}
+	totalSize := len(content)
+
+	// Iterate over the provided IP addresses and ports
+	for i, ip := range req.IpAddresses {
+		addr := fmt.Sprintf("%s:%d", ip, req.PortNumbers[i])
+		conn, err := grpc.Dial(addr, grpc.WithInsecure())
+		if err != nil {
+			log.Printf("Connection failed to %s: %v", addr, err)
+			continue
+		}
+		client := pb.NewFileServiceClient(conn)
+
+		// STEP 1: Begin Upload
+		_, err = client.BeginUploadFile(ctx, &pb.FileUploadRequest{
+			FileName: req.FileName,
+		})
+		if err != nil {
+			log.Printf("Replication BeginUpload failed to %s: %v", addr, err)
+			conn.Close()
+			continue
+		}
+		log.Printf("Replication started for %s on %s", req.FileName, addr)
+
+		// STEP 2: Update Upload with chunks and progress logging
+		var replicateError error
+		for offset := 0; offset < totalSize; offset += chunkSize {
+			end := offset + chunkSize
+			if end > totalSize {
+				end = totalSize
+			}
+			chunk := content[offset:end]
+			_, err := client.UpdateUploadFile(ctx, &pb.FileUploadRequest{
+				FileName:    req.FileName,
+				FileContent: chunk,
+			})
+			if err != nil {
+				log.Printf("Replication UpdateUpload failed to %s at offset %d: %v", addr, offset, err)
+				replicateError = err
+				break
+			}
+
+			progress := float64(end) / float64(totalSize) * 100
+			log.Printf("Replication progress to %s: %.2f%%", addr, progress)
+		}
+
+		// STEP 3: End Upload (only if no error occurred during chunk updates)
+		if replicateError == nil {
+			_, err := client.EndUploadFile(ctx, &pb.FileUploadRequest{
+				FileName: req.FileName,
+			})
+			if err != nil {
+				log.Printf("Replication EndUpload failed to %s: %v", addr, err)
+			} else {
+				log.Printf("Replication completed successfully to %s", addr)
+			}
+		} else {
+			log.Printf("Replication to %s encountered an error; skipping EndUpload", addr)
+		}
+
+		conn.Close()
+	}
+	return &pb.ReplicateResponse{}, nil
+}
+
+func (d *DataNodeServer) BeginUploadFile(ctx context.Context, req *pb.FileUploadRequest) (*pb.FileUploadResponse, error) {
+	log.Printf("Begin upload for: %s", req.FileName)
+
+	// Metadata extraction
+	_, exists := metadata.FromIncomingContext(ctx)
+	if !exists {
+		log.Println("No metadata in request")
+	}
+
+	// Save directory
+	nodeDir := fmt.Sprintf("./uploaded_%s_%s", d.IP, d.PortForClient[1:])
+	if err := os.MkdirAll(nodeDir, 0755); err != nil {
+		return nil, fmt.Errorf("error creating upload dir: %v", err)
+	}
+
+	savePath := filepath.Join(nodeDir, req.FileName)
+	file, err := os.Create(savePath)
+	if err != nil {
+		return nil, fmt.Errorf("error creating file: %v", err)
+	}
+
+	if d.openFiles == nil {
+		d.openFiles = make(map[string]*os.File)
+	}
+	d.openFiles[req.FileName] = file
+
+	log.Printf("File created at: %s", savePath)
+	return &pb.FileUploadResponse{Message: "Upload initiated"}, nil
+}
+
+func (d *DataNodeServer) UpdateUploadFile(ctx context.Context, req *pb.FileUploadRequest) (*pb.FileUploadResponse, error) {
+	file, ok := d.openFiles[req.FileName]
+	if !ok {
+		return nil, fmt.Errorf("file not found in active uploads: %s", req.FileName)
+	}
+
+	if _, err := file.Write(req.FileContent); err != nil {
+		return nil, fmt.Errorf("error writing file content: %v", err)
+	}
+
+	log.Printf("Chunk written to %s", req.FileName)
+	return &pb.FileUploadResponse{Message: "Chunk received"}, nil
+}
+
+func (d *DataNodeServer) EndUploadFile(ctx context.Context, req *pb.FileUploadRequest) (*pb.FileUploadResponse, error) {
+	file, ok := d.openFiles[req.FileName]
+	if !ok {
+		return nil, fmt.Errorf("file not found in active uploads: %s", req.FileName)
+	}
+
+	file.Close()
+	delete(d.openFiles, req.FileName)
+
+	log.Printf("Upload finished for %s", req.FileName)
+
+	// Metadata for notifying master
+	md, exists := metadata.FromIncomingContext(ctx)
+	if !exists {
+		log.Println("No metadata in request")
+	}
+	clientIP := strings.Join(md.Get("client-ip"), ",")
+	clientPort := strings.Join(md.Get("client-port"), ",")
+	outMeta := metadata.Pairs("client-ip", clientIP, "client-port", clientPort)
+	outCtx := metadata.NewOutgoingContext(context.Background(), outMeta)
+
+	savePath := fmt.Sprintf("./uploaded_%s_%s/%s", d.IP, d.PortForClient[1:], req.FileName)
+	go notifyMasterOfUpload(d, outCtx, req.FileName, savePath)
+
+	return &pb.FileUploadResponse{Message: "Upload complete"}, nil
+}
+
 func notifyMasterOfUpload(d *DataNodeServer, ctx context.Context, filename, path string) {
 	conn, err := grpc.Dial(masterAddress, grpc.WithInsecure())
 	if err != nil {
@@ -98,6 +244,57 @@ func notifyMasterOfUpload(d *DataNodeServer, ctx context.Context, filename, path
 }
 
 func (d *DataNodeServer) DownloadFile(ctx context.Context, in *pb.FileDownloadRequest) (*pb.FileDownloadResponse, error) {
+	log.Printf("FileDownloadRequest %s", in.FileName)
+	dir := fmt.Sprintf("./uploaded_%s_%s", d.IP, d.PortForClient[1:])
+
+	filePath := filepath.Join(dir, in.FileName)
+
+	fileContent, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("ReadFile fail %v", err)
+	}
+	// Create and return the response with the file content
+	response := &pb.FileDownloadResponse{
+		FileContent: fileContent,
+	}
+	return response, nil
+}
+
+func (d *DataNodeServer) BeginDownloadFile(ctx context.Context, in *pb.FileDownloadRequest) (*pb.FileDownloadResponse, error) {
+	log.Printf("FileDownloadRequest %s", in.FileName)
+	dir := fmt.Sprintf("./uploaded_%s_%s", d.IP, d.PortForClient[1:])
+
+	filePath := filepath.Join(dir, in.FileName)
+
+	fileContent, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("ReadFile fail %v", err)
+	}
+	// Create and return the response with the file content
+	response := &pb.FileDownloadResponse{
+		FileContent: fileContent,
+	}
+	return response, nil
+}
+
+func (d *DataNodeServer) UpdateDownloadFile(ctx context.Context, in *pb.FileDownloadRequest) (*pb.FileDownloadResponse, error) {
+	log.Printf("FileDownloadRequest %s", in.FileName)
+	dir := fmt.Sprintf("./uploaded_%s_%s", d.IP, d.PortForClient[1:])
+
+	filePath := filepath.Join(dir, in.FileName)
+
+	fileContent, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("ReadFile fail %v", err)
+	}
+	// Create and return the response with the file content
+	response := &pb.FileDownloadResponse{
+		FileContent: fileContent,
+	}
+	return response, nil
+}
+
+func (d *DataNodeServer) EndDownloadFile(ctx context.Context, in *pb.FileDownloadRequest) (*pb.FileDownloadResponse, error) {
 	log.Printf("FileDownloadRequest %s", in.FileName)
 	dir := fmt.Sprintf("./uploaded_%s_%s", d.IP, d.PortForClient[1:])
 
@@ -138,45 +335,46 @@ func (d *DataNodeServer) sendHeartbeat() {
 		}
 	}
 }
-func (d *DataNodeServer) Replicate(ctx context.Context, req *pb.ReplicateRequest) (*pb.ReplicateResponse, error) {
 
-	log.Printf("Replicating file: %s to %d node(s)", req.FileName, len(req.IpAddresses))
-
-	// Read the content of the file
-	content, err := os.ReadFile(req.FilePath)
-	if err != nil {
-		return nil, fmt.Errorf("replication failed, cannot read file: %v", err)
-	}
-
-	// Iterate over the provided IP addresses and ports
-	for i, ip := range req.IpAddresses {
-
-		addr := fmt.Sprintf("%s:%d", ip, req.PortNumbers[i])
-
-		conn, err := grpc.Dial(addr, grpc.WithInsecure())
-		if err != nil {
-			log.Printf("Connection failed to %s: %v", addr, err)
-			continue
-		}
-		defer conn.Close()
-
-		client := pb.NewFileServiceClient(conn)
-
-		// Invoke the UploadFile service
-		_, err = client.UploadFile(ctx, &pb.FileUploadRequest{
-			FileName:    req.FileName,
-			FileContent: content,
-		})
-		if err != nil {
-			log.Printf("Replication upload failed to %s: %v", addr, err)
-		} else {
-			log.Printf("Replicated to %s", addr)
-		}
-
-	}
-
-	return &pb.ReplicateResponse{}, nil
-}
+//func (d *DataNodeServer) Replicate(ctx context.Context, req *pb.ReplicateRequest) (*pb.ReplicateResponse, error) {
+//
+//	log.Printf("Replicating file: %s to %d node(s)", req.FileName, len(req.IpAddresses))
+//
+//	// Read the content of the file
+//	content, err := os.ReadFile(req.FilePath)
+//	if err != nil {
+//		return nil, fmt.Errorf("replication failed, cannot read file: %v", err)
+//	}
+//
+//	// Iterate over the provided IP addresses and ports
+//	for i, ip := range req.IpAddresses {
+//
+//		addr := fmt.Sprintf("%s:%d", ip, req.PortNumbers[i])
+//
+//		conn, err := grpc.Dial(addr, grpc.WithInsecure())
+//		if err != nil {
+//			log.Printf("Connection failed to %s: %v", addr, err)
+//			continue
+//		}
+//		defer conn.Close()
+//
+//		client := pb.NewFileServiceClient(conn)
+//
+//		// Invoke the UploadFile service
+//		_, err = client.UploadFile(ctx, &pb.FileUploadRequest{
+//			FileName:    req.FileName,
+//			FileContent: content,
+//		})
+//		if err != nil {
+//			log.Printf("Replication upload failed to %s: %v", addr, err)
+//		} else {
+//			log.Printf("Replicated to %s", addr)
+//		}
+//
+//	}
+//
+//	return &pb.ReplicateResponse{}, nil
+//}
 
 /*
 This function extracts the local IP that the data node runs on
